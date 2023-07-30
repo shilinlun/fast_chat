@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 )
 
 type WebsocketService struct {
@@ -40,14 +41,9 @@ var (
 
 // CenterHandler 处理中心，关联着每个 Client 的注册、注销、广播通道，相当于每个用户的中心通讯的中介。
 type CenterHandler struct {
-	// 单人
-	single chan []byte
-	// 广播通道，有数据则循环每个用户广播出去
-	broadcast chan []byte
-	// 注销通道，有用户关闭连接 则将该用户剔出集合map中
-	unregister chan *Client
 	// 用户集合，每个用户本身也在跑两个协程，监听用户的读、写的状态
-	clients map[string]*Client
+	clients      map[string]*Client
+	groupClients map[string][]string
 }
 
 // Client 抽象出来的 Client，里面有这个 websocket 连接的 读 和 写 操作
@@ -62,11 +58,9 @@ type Client struct {
 // 写，主动推送消息给客户端
 func (c *Client) writePump() {
 	defer func() {
-		c.handler.unregister <- c
 		c.conn.Close()
 	}()
 	for {
-		// 广播推过来的新消息，马上通过websocket推给自己
 		message, _ := <-c.send
 		if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 			return
@@ -77,7 +71,6 @@ func (c *Client) writePump() {
 // 读，监听客户端是否有推送内容过来服务端
 func (c *Client) readPump() {
 	defer func() {
-		c.handler.unregister <- c
 		c.conn.Close()
 	}()
 	for {
@@ -99,6 +92,7 @@ func (c *Client) handleMessage(message []byte) {
 	if err := json.Unmarshal(message, innerMSg); err != nil {
 		return
 	}
+	innerMSg.CreatTime = time.Now().Unix()
 	fmt.Println("start handleMessage", innerMSg)
 	go func() {
 		if err := c.storage.Insert(context.Background(), innerMSg); err != nil {
@@ -107,30 +101,64 @@ func (c *Client) handleMessage(message []byte) {
 	}()
 	switch innerMSg.MsgType {
 	case 1:
-		c.handler.clients[innerMSg.FromId] = c
+		c.handLoginMsg(innerMSg)
 	case 2:
-		delete(c.handler.clients, innerMSg.FromId)
+		c.handLogoutMsg(innerMSg)
 	case 3:
-		c.send <- message
-		if conn, ok := c.handler.clients[innerMSg.ToId]; ok {
-			conn.send <- message
-		}
+		c.handSingleMsg(innerMSg, message)
 	case 4:
-		for _, client := range c.handler.clients {
-			client.send <- message
-		}
+		c.handAllMsg(message)
+	case 5:
+		c.handGroupMsg(innerMSg, message)
 	}
 	fmt.Println("end handleMessage", innerMSg)
+}
+
+// 登录
+func (c *Client) handLoginMsg(innerMSg *entity.Msg) {
+	c.handler.clients[innerMSg.FromId] = c
+	var groupIds []string
+	// 获取该uid所在的group ids
+	for _, groupId := range groupIds {
+		c.handler.groupClients[groupId] = append(c.handler.groupClients[groupId], innerMSg.FromId)
+	}
+}
+
+// 注销
+func (c *Client) handLogoutMsg(innerMSg *entity.Msg) {
+	delete(c.handler.clients, innerMSg.FromId)
+}
+
+// 单对单
+func (c *Client) handSingleMsg(innerMSg *entity.Msg, message []byte) {
+	c.send <- message
+	if conn, ok := c.handler.clients[innerMSg.ToId]; ok {
+		conn.send <- message
+	}
+}
+
+// 对所有人
+func (c *Client) handAllMsg(message []byte) {
+	for _, client := range c.handler.clients {
+		client.send <- message
+	}
+}
+
+// 群发
+func (c *Client) handGroupMsg(innerMSg *entity.Msg, message []byte) {
+	for _, toId := range c.handler.groupClients[innerMSg.ToId] {
+		if conn, ok := c.handler.clients[toId]; ok {
+			conn.send <- message
+		}
+	}
 }
 
 func (w *WebsocketService) handleWebsocket(writer http.ResponseWriter, request *http.Request) {
 	serviceOnce.Do(func() {
 		// 应用一运行，就初始化 CenterHandler 处理中心对象
 		handler = CenterHandler{
-			single:     make(chan []byte),
-			broadcast:  make(chan []byte),
-			unregister: make(chan *Client),
-			clients:    make(map[string]*Client),
+			clients:      make(map[string]*Client),
+			groupClients: make(map[string][]string),
 		}
 
 	})

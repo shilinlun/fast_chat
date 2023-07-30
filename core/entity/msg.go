@@ -6,6 +6,7 @@ type Msg struct {
 	MsgBody     string `json:"msgBody" bson:"msgBody"`
 	FromId      string `json:"fromId" bson:"fromId"`
 	ToId        string `json:"toId" bson:"toId"`
+	CreatTime   int64  `json:"creatTime" bson:"creatTime"`
 }
 
 /*

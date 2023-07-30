@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>聊天室-demo</title>
+    <script src="https://apps.bdimg.com/libs/jquery/2.1.4/jquery.min.js"></script>
+</head>
+<body>
+<h1>聊天室-demo</h1>
+<div class="show-data"></div>
+<input class="content">
+<button class="send-btn">发送</button>
+<script>
+    // 测试用户
+    var username = "用户_234";
+    var ws_url = "ws://localhost:8081/ws";
+    var ws = new WebSocket(ws_url);
+    // 新连接
+    ws.onopen = function (ev) {
+        ws.send('{"msgType":1,"fromId":"' + username + '","msgBody":" 上线了"}');
+    };
+    // 发送内容
+    $(".send-btn").click(function () {
+        var content = $(".content").val();
+        content = '{"msgType":3,"fromId":"' + username + '","msgBody":"' + content + '","toId":"用户_345"}'
+        ws.send(content);
+        $(".content").val("");
+    });
+    // 监听接收新消息
+    ws.onmessage = function (ent) {
+        var r = JSON.parse(ent.data);
+        console.log(r)
+        if(r.fromId == username){
+            r.fromId = username + "(你)"
+        }
+        $(".show-data").append(r.fromId + ":" + r.msgBody + "<br>");
+    }
+    // 退出页面
+    ws.onclose = function (ent) {
+        ws.send('{"type":"logout","uid":"' + username + '","msg":" 下线了"}');
+    }
+</script>
+
+</body>
+</html>
